@@ -115,28 +115,11 @@ button{font:inherit;color:inherit}
   animation:panelIn .5s cubic-bezier(.2,.75,.3,1) forwards;
 }
 @keyframes panelIn{to{opacity:1;transform:none}}
-.panel.dragging{opacity:.28}
-.panel-ghost{
-  position:fixed;z-index:999;pointer-events:none;
-  box-shadow:0 24px 60px rgba(0,0,0,.65);
-  border:1px solid rgba(126,168,216,.55);border-radius:var(--radius);
-  overflow:hidden;transform-origin:center;
-  animation:none;opacity:1;
-}
-.drop-slot{
-  grid-column:span var(--span,6);
-  border:1px dashed rgba(126,168,216,.5);border-radius:var(--radius);
-  background:rgba(69,205,240,.05);animation:none;opacity:1;transform:none;
-}
 .phead{
   display:flex;align-items:center;gap:9px;
   padding:10px 12px;background:rgba(11,26,46,.72);
-  border-bottom:1px solid var(--rule);cursor:grab;touch-action:none;
-  user-select:none;-webkit-user-select:none;
+  border-bottom:1px solid var(--rule);
 }
-.phead:active{cursor:grabbing}
-.grip{display:flex;flex-direction:column;gap:2.5px;flex:none;opacity:.55}
-.grip i{display:block;width:12px;height:1.5px;background:var(--ink-mid);border-radius:1px}
 .ptitle{
   font-family:var(--font-display);font-stretch:condensed;text-transform:uppercase;
   letter-spacing:.12em;font-size:13px;font-weight:700;color:var(--ink);
@@ -255,7 +238,11 @@ td.big{
 /* ---------- Podium (composed SVG scene) ---------- */
 .podium-scene{position:relative;margin:2px 0 4px}
 .podium-scene svg{display:block;width:100%;height:auto;overflow:visible}
-@keyframes pilotIn{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
+/* Entrance animation lives on an inner <g> that has no transform attribute.
+   Only opacity is animated, so it can never clobber the positioning transform
+   on the parent group. */
+.pilot-enter{animation:pilotIn .55s ease-out both}
+@keyframes pilotIn{from{opacity:0}to{opacity:1}}
 .streakbar{
   display:flex;gap:8px;flex-wrap:wrap;margin-top:11px;padding-top:10px;
   border-top:1px solid var(--rule);
@@ -265,6 +252,32 @@ td.big{
   border:1px solid var(--rule);border-radius:20px;padding:3px 9px;
 }
 .streakbar .s b{color:var(--ink);font-weight:600}
+
+/* ---------- Alert banner (fetch problems) ---------- */
+.alertbar{display:none}
+.alertbar.show{
+  display:flex;align-items:flex-start;gap:10px;
+  padding:11px clamp(14px,2.4vw,30px);
+  font-size:12.5px;line-height:1.55;border-bottom:1px solid;
+}
+.alertbar.err{background:rgba(255,95,109,.1);border-color:rgba(255,95,109,.45);color:#ffc0c6}
+.alertbar.warn{background:rgba(255,159,67,.1);border-color:rgba(255,159,67,.4);color:#ffd7a8}
+.alertbar .ico{
+  flex:none;width:19px;height:19px;border-radius:50%;display:grid;place-items:center;
+  background:currentColor;color:#0a1424;font-weight:700;font-size:11px;
+  font-family:var(--font-hud);margin-top:1px;
+}
+.alertbar .txt{flex:1}
+.alertbar .txt b{
+  display:block;font-family:var(--font-display);font-stretch:condensed;
+  text-transform:uppercase;letter-spacing:.09em;font-size:12.5px;margin-bottom:2px;
+}
+.alertbar .alert-x{
+  flex:none;background:transparent;border:1px solid currentColor;border-radius:6px;
+  width:22px;height:22px;cursor:pointer;color:inherit;opacity:.7;font-size:11px;
+  display:grid;place-items:center;
+}
+.alertbar .alert-x:hover{opacity:1}
 
 /* ---------- Period selector bar ---------- */
 .periodbar{
@@ -447,7 +460,7 @@ textarea:focus,input:focus{border-color:#45cdf0;outline:none}
   border:1px dashed var(--rule);border-radius:10px;
 }
 
-@media (max-width:1080px){ .panel{grid-column:span 12 !important} .drop-slot{grid-column:span 12} }
+@media (max-width:1080px){ .panel{grid-column:span 12 !important} }
 @media (max-width:560px){
   .hud-row,.mini{grid-template-columns:1fr}
   .board-strip{grid-template-columns:22px 1fr auto;row-gap:5px}
@@ -478,11 +491,11 @@ textarea:focus,input:focus{border-color:#45cdf0;outline:none}
   <div class="spacer"></div>
   <div class="toolbar">
     <button class="btn" id="btn-refresh" hidden>Refresh data</button>
-    <button class="btn" id="btn-reset">Reset layout</button>
   </div>
   <div class="stamp" id="stamp"><span class="livedot"></span>Awaiting data</div>
 </header>
 
+<div class="alertbar" id="alert" role="status" aria-live="polite"></div>
 <div class="periodbar" id="periodbar"></div>
 
 <main class="board" id="board"></main>
@@ -1166,7 +1179,11 @@ var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-moti
 var $  = function(s,r){ return (r||document).querySelector(s); };
 var esc = function(s){ return String(s).replace(/[&<>"]/g,function(c){
   return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); };
-var visible = function(){ return STATE.model.players.filter(function(p){ return !STATE.hidden[p.key]; }); };
+/* Players from the period-scoped view, minus any hidden by the legend.
+   This MUST read the scoped view: charts pair these values against the scoped
+   date axis, so sourcing them from the full model pairs (say) August dates with
+   the very first July scores. */
+var visible = function(){ return VIEW().players.filter(function(p){ return !STATE.hidden[p.key]; }); };
 
 /* The period-scoped view of the data (all time, or one calendar month). Panels
    that show a race/standings read this; Today, the monthly panels and Crew read
@@ -1792,11 +1809,16 @@ function renderTrophies(body){
         'font-size="9" letter-spacing="1.6" style="font-family:ui-monospace,monospace">WINS</text>'+
       '</g>';
 
-    /* pilot standing on the plinth top */
+    /* pilot standing on the plinth top.
+       The outer <g> carries the positioning transform as an ATTRIBUTE and must
+       never be given a CSS animation: a CSS transform overrides the attribute,
+       so animating this element would snap the pilot to the SVG origin. The
+       entrance animation therefore lives on an inner <g>, which has no
+       transform attribute of its own. */
     var sc=0.62, px=cx-30*sc, py=(ty-d+2)-94*sc;
-    scene+='<g transform="translate('+px.toFixed(1)+','+py.toFixed(1)+') scale('+sc+')" '+
-      'style="animation:pilotIn .55s cubic-bezier(.2,.8,.3,1) both;animation-delay:'+
-      (slot*0.09)+'s">'+pilotArt(p.color,r)+'</g>';
+    scene+='<g transform="translate('+px.toFixed(1)+','+py.toFixed(1)+') scale('+sc+')">'+
+      '<g class="pilot-enter" style="animation-delay:'+(slot*0.09)+'s">'+
+      pilotArt(p.color,r)+'</g></g>';
 
     /* name + share of days, below the floor */
     labels+='<text x="'+cx+'" y="'+(floorY+22)+'" text-anchor="middle" fill="#e9f2ff" '+
@@ -2016,7 +2038,7 @@ function renderMonthWins(body){
 }
 
 /* ============================================================================
-   12. PANEL: DATA INPUT
+   12. STATUS REPORTING
    ========================================================================== */
 function csvField(v){
   var s=String(v==null?"":v);
@@ -2033,87 +2055,21 @@ function toCleanCSV(){
   return out.map(function(r){ return r.map(csvField).join(","); }).join("\n");
 }
 
-function renderData(body){
-  var srcDot = SRC.error ? "err" : (SRC.kind==="sheet" ? "on" : "");
-  var srcLine;
-  if(SRC.error) srcLine='<b>Live sheet unreachable</b> \u2014 '+esc(SRC.error);
-  else if(SRC.kind==="sheet") srcLine='Loaded from the <b>live sheet</b>'+
-    (SRC.at?' at <b>'+SRC.at.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})+'</b>':'');
-  else if(SRC.kind==="paste") srcLine='Showing <b>pasted data</b>';
-  else if(SRC.kind==="file") srcLine='Showing an <b>uploaded file</b>';
-  else srcLine='Showing the <b>bundled sample</b>. Add a published CSV link for live updates.';
-
-  body.innerHTML=
-    '<label class="field-lbl" for="src-url">Live source \u00B7 published Google Sheets CSV</label>'+
-    '<div class="srcrow">'+
-      '<input type="text" id="src-url" spellcheck="false" placeholder="https://docs.google.com/\u2026output=csv" '+
-        'value="'+esc(SRC.url||DATA_SOURCE.url||"")+'">'+
-      '<button class="btn sm primary" id="btn-fetch">Fetch</button>'+
-    '</div>'+
-    '<div class="srcstat"><span class="dot '+srcDot+'"></span>'+srcLine+'</div>'+
-    '<label class="field-lbl" for="csv-in" style="margin-top:12px">Or paste the sheet export</label>'+
-    '<textarea id="csv-in" spellcheck="false" aria-describedby="csv-msg">'+esc(STATE.rawCSV)+'</textarea>'+
-    '<div class="rowbtns">'+
-      '<button class="btn primary" id="btn-load">Load data</button>'+
-      '<button class="btn" id="btn-dl">Download data</button>'+
-      '<button class="btn" id="btn-seed">Restore sample</button>'+
-    '</div>'+
-    '<label class="filedrop" for="csv-file" id="drop" style="margin-top:9px">'+
-      'Choose a .csv file \u2014 or drop one here'+
-      '<input type="file" id="csv-file" accept=".csv,text/csv" hidden></label>'+
-    '<div class="msg" id="csv-msg" role="status" aria-live="polite"></div>';
-
-  var ta=$("#csv-in",body), drop=$("#drop",body), urlBox=$("#src-url",body);
-
-  function useURL(){
-    var u=urlBox.value.trim();
-    if(!u){ showMsg("err","No link to fetch.","Paste your published CSV link first."); return; }
-    if(!/^https?:\/\//i.test(u)){
-      showMsg("err","That does not look like a link.","It should start with https:// and end in output=csv.");
-      return;
-    }
-    showMsg("ok","Fetching\u2026","<div style='margin-top:4px'>Contacting the published sheet.</div>");
-    Store.set("tg-src",u);
-    loadFromSource(u,false).then(function(){ startAutoRefresh(); });
-  }
-  $("#btn-fetch",body).addEventListener("click",useURL);
-  urlBox.addEventListener("keydown",function(e){ if(e.key==="Enter"){ e.preventDefault(); useURL(); } });
-
-  $("#btn-load",body).addEventListener("click",function(){ loadCSV(ta.value,false,"paste"); });
-  $("#btn-seed",body).addEventListener("click",function(){ ta.value=SEED; loadCSV(SEED,false,"sample"); });
-  $("#btn-dl",body).addEventListener("click",function(){
-    if(!STATE.model) return;
-    var blob=new Blob([toCleanCSV()],{type:"text/csv;charset=utf-8"});
-    var a=document.createElement("a"), url=URL.createObjectURL(blob);
-    var d=STATE.model.dates[STATE.model.latest];
-    a.href=url; a.download="timeguessr-"+d.iso+".csv";
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(function(){ URL.revokeObjectURL(url); },400);
-  });
-  function readFile(f){
-    if(!f) return;
-    var fr=new FileReader();
-    fr.onload=function(){ ta.value=fr.result; loadCSV(fr.result,false,"file"); };
-    fr.onerror=function(){ showMsg("err","Could not read that file.","Try opening it and pasting the text instead."); };
-    fr.readAsText(f);
-  }
-  $("#csv-file",body).addEventListener("change",function(e){ readFile(e.target.files[0]); });
-  ["dragenter","dragover"].forEach(function(ev){
-    drop.addEventListener(ev,function(e){ e.preventDefault(); drop.classList.add("over"); });
-  });
-  ["dragleave","drop"].forEach(function(ev){
-    drop.addEventListener(ev,function(e){ e.preventDefault(); drop.classList.remove("over"); });
-  });
-  drop.addEventListener("drop",function(e){ readFile(e.dataTransfer.files[0]); });
-  if(STATE.lastMsg) showMsg(STATE.lastMsg.k,STATE.lastMsg.t,STATE.lastMsg.d);
-}
-
+/* Status reporting. The Data Input panel used to host this; with the dashboard
+   running purely off the live feed, problems surface in a masthead banner so a
+   silent fetch failure can never masquerade as fresh data. */
 function showMsg(kind,title,detail){
   STATE.lastMsg={k:kind,t:title,d:detail};
-  var msg=document.getElementById("csv-msg");
-  if(!msg) return;
-  msg.className="msg show "+kind;
-  msg.innerHTML="<b>"+esc(title)+"</b>"+(detail||"");
+  var bar=document.getElementById("alert");
+  if(!bar) return;
+  /* success is already conveyed by the header stamp; only problems get a banner */
+  if(kind==="ok"){ bar.className="alertbar"; bar.innerHTML=""; return; }
+  bar.className="alertbar show "+kind;
+  bar.innerHTML='<span class="ico">'+(kind==="err"?"\u2715":"!")+'</span>'+
+    '<span class="txt"><b>'+esc(title)+'</b>'+(detail||"")+'</span>'+
+    '<button class="alert-x" id="alert-x" aria-label="Dismiss">\u2715</button>';
+  var x=document.getElementById("alert-x");
+  if(x) x.addEventListener("click",function(){ bar.className="alertbar"; bar.innerHTML=""; });
 }
 
 /* ============================================================================
@@ -2130,8 +2086,8 @@ function showMsg(kind,title,detail){
    editable in the Data Input panel, which is handy for testing.
    ========================================================================== */
 var DATA_SOURCE = {
-  url: "https://docs.google.com/spreadsheets/d/e/2PACX-1vSlw5b1SHxnChlA9RNwxcMVsTd3p9BnR47fnV6y-lS8IZWenLkLdwTj3668MRNh7jq476LduGsNtpjl/pub?gid=0&single=true&output=csv",
-  refreshMinutes: 0  
+  url: "https://docs.google.com/spreadsheets/d/e/2PACX-.../pub?gid=0&single=true&output=csv",              /* 
+  refreshMinutes: 0     /* 0 = fetch once on load; e.g. 15 = re-poll quarter-hourly */
 };
 
 var SRC={ kind:"sample", at:null, error:null, url:"" };
@@ -2159,7 +2115,7 @@ function loadFromSource(url,quiet){
     SRC.error=err.message||String(err);
     SRC.kind=STATE.model?SRC.kind:"sample";
     if(!STATE.model){ loadCSV(SEED,true,"sample"); }
-    updateStamp(); refreshAll(["data"]);
+    updateStamp();
     showMsg("warn","Could not reach the live sheet",
       "<div style='margin-top:4px'>"+esc(SRC.error)+"</div>"+
       "<div style='margin-top:6px;opacity:.8'>Showing "+
@@ -2199,17 +2155,16 @@ function loadCSV(text,quiet,kind){
   var failed=model.checks.filter(function(c){ return !c.ok; });
   if(!quiet){
     var range=fmtDateLong(model.dates[0])+" \u2013 "+fmtDateLong(model.dates[model.latest]);
-    if(failed.length)
-      showMsg("warn","Loaded, with "+failed.length+" cross-check difference"+(failed.length>1?"s":""),
-        "<div style='margin-top:4px'>Everything shown is recomputed from the daily scores. "+
-        "These figures in the sheet disagree:</div><ul>"+
-        failed.map(function(c){ return "<li>"+esc(c.label)+"</li>"; }).join("")+"</ul>");
-    else
-      showMsg("ok","Loaded "+model.dates.length+" days \u00B7 "+model.players.length+" players",
-        "<div style='margin-top:4px'>"+esc(range)+". "+(model.checks.length
-          ? "All "+model.checks.length+" cross-checks against the sheet\u2019s own totals, score "+
-            "race and rolling rows agree."
-          : "Every figure recomputed from the daily scores.")+"</div>");
+    /* Cross-check mismatches mean the SHEET's own summary rows disagree with the
+       recomputed figures - almost always because a formula range did not stretch
+       to new day columns. Everything on screen is recomputed and correct, so this
+       is a note for the sheet owner, not an alarm for everyone opening the page:
+       it goes to the console, never the banner. */
+    if(failed.length&&window.console&&console.info)
+      console.info("TimeGuessr: "+failed.length+" sheet cross-check(s) differ from the recomputed "+
+        "values (dashboard figures are the correct ones): "+
+        failed.map(function(c){ return c.label; }).join(", "));
+    showMsg("ok","Loaded "+model.dates.length+" days","");
   }
   return true;
 }
@@ -2246,40 +2201,28 @@ var PANELS=[
   {id:"history",   title:"Score History",     note:"",                         span:7,  render:renderHistory},
   {id:"rolling",   title:"Rolling 7-Day Average", note:"",                     span:5,  render:renderRolling},
   {id:"trophies",  title:"Winning Days Podium", note:"",                       span:4,  render:renderTrophies},
-  {id:"crew",      title:"Crew",              note:"CUSTOMISE",                span:4,  render:renderCrew},
-  {id:"data",      title:"Data Input",        note:"CSV",                      span:4,  render:renderData}
+  {id:"crew",      title:"Crew",              note:"CUSTOMISE",                span:4,  render:renderCrew}
 ];
-var DEFAULT_ORDER=PANELS.map(function(p){return p.id;});
-var DEFAULT_SPANS=(function(){ var o={}; PANELS.forEach(function(p){o[p.id]=p.span;}); return o; })();
+/* Panels render in this fixed order. Rearrange this array to change the layout. */
+var PANEL_ORDER=PANELS.map(function(p){return p.id;});
 var byId=function(id){ return PANELS.filter(function(p){return p.id===id;})[0]; };
 
 function renderBoard(){
   var board=document.getElementById("board");
   board.innerHTML="";
-  (STATE.order||DEFAULT_ORDER).forEach(function(id,i){
+  PANEL_ORDER.forEach(function(id,i){
     var def=byId(id); if(!def) return;
     var el=document.createElement("section");
     el.className="panel"; el.dataset.id=id;
-    el.style.setProperty("--span",STATE.spans[id]||def.span);
+    el.style.setProperty("--span",def.span);
     el.style.animationDelay=(i*55)+"ms";
-    el.innerHTML='<div class="phead" tabindex="0" role="button" '+
-        'aria-label="'+esc(def.title)+' panel. Drag to move, or hold Alt and press the arrow keys.">'+
-        '<span class="grip"><i></i><i></i><i></i></span>'+
+    el.innerHTML='<div class="phead">'+
         '<span class="ptitle">'+esc(def.title)+'</span>'+
         (def.note?'<span class="pnote">'+esc(def.note)+'</span>':'')+
-        '<span class="spacer"></span>'+
-        '<button class="iconbtn" data-wider title="Change panel width">\u2194</button>'+
       '</div><div class="pbody"></div>';
     board.appendChild(el);
     try{ def.render($(".pbody",el)); }
     catch(e){ $(".pbody",el).innerHTML='<div class="empty">This panel could not draw with the current data.</div>'; }
-    $("[data-wider]",el).addEventListener("click",function(){
-      var cur=+(STATE.spans[id]||def.span), steps=[4,5,6,7,8,12];
-      var nxt=steps[(steps.indexOf(cur)+1)%steps.length] || 6;
-      STATE.spans[id]=nxt; el.style.setProperty("--span",nxt);
-      refreshAll([id]); saveLayout();
-    });
-    initDrag(el);
   });
 }
 
@@ -2292,92 +2235,10 @@ function refreshAll(ids){
 }
 
 /* ============================================================================
-   15. DRAG TO REARRANGE  (pointer events: mouse + touch)
-   ========================================================================== */
-function initDrag(panel){
-  var head=$(".phead",panel), board=document.getElementById("board");
-  head.addEventListener("pointerdown",function(e){
-    if(e.target.closest(".iconbtn")) return;
-    e.preventDefault();
-    var rect=panel.getBoundingClientRect();
-    var offX=e.clientX-rect.left, offY=e.clientY-rect.top;
-
-    var ghost=panel.cloneNode(true);
-    ghost.className="panel panel-ghost";
-    ghost.style.width=rect.width+"px"; ghost.style.height=rect.height+"px";
-    ghost.style.left=rect.left+"px";   ghost.style.top=rect.top+"px";
-    document.body.appendChild(ghost);
-
-    var slot=document.createElement("div");
-    slot.className="drop-slot";
-    slot.style.setProperty("--span",panel.style.getPropertyValue("--span"));
-    slot.style.height=rect.height+"px";
-    board.insertBefore(slot,panel);
-    panel.style.display="none";
-    head.setPointerCapture(e.pointerId);
-
-    function move(ev){
-      ghost.style.left=(ev.clientX-offX)+"px";
-      ghost.style.top=(ev.clientY-offY)+"px";
-      var px=ev.clientX, py=ev.clientY, target=null, nearest=null, bestD=Infinity;
-      Array.prototype.forEach.call(board.children,function(c){
-        if(c===slot||c===panel||!c.classList.contains("panel")) return;
-        var r=c.getBoundingClientRect();
-        if(px>=r.left&&px<=r.right&&py>=r.top&&py<=r.bottom) target=c;
-        var d=Math.hypot(px-(r.left+r.width/2),py-(r.top+r.height/2));
-        if(d<bestD){ bestD=d; nearest=c; }
-      });
-      var t=target||nearest;
-      if(!t) return;
-      var r2=t.getBoundingClientRect();
-      board.insertBefore(slot, (px<r2.left+r2.width/2)?t:t.nextSibling);
-    }
-    function up(){
-      head.releasePointerCapture(e.pointerId);
-      head.removeEventListener("pointermove",move);
-      head.removeEventListener("pointerup",up);
-      head.removeEventListener("pointercancel",up);
-      board.insertBefore(panel,slot);
-      slot.remove(); ghost.remove();
-      panel.style.display="";
-      commitOrder();
-    }
-    head.addEventListener("pointermove",move);
-    head.addEventListener("pointerup",up);
-    head.addEventListener("pointercancel",up);
-  });
-
-  /* keyboard reordering: Alt + Left/Right */
-  head.addEventListener("keydown",function(e){
-    if(!e.altKey||(e.key!=="ArrowLeft"&&e.key!=="ArrowRight")) return;
-    e.preventDefault();
-    var board=document.getElementById("board");
-    if(e.key==="ArrowLeft"&&panel.previousElementSibling)
-      board.insertBefore(panel,panel.previousElementSibling);
-    else if(e.key==="ArrowRight"&&panel.nextElementSibling)
-      board.insertBefore(panel.nextElementSibling,panel);
-    commitOrder(); $(".phead",panel).focus();
-  });
-}
-
-function commitOrder(){
-  STATE.order=Array.prototype.map.call(document.getElementById("board").children,function(c){ return c.dataset.id; })
-    .filter(Boolean);
-  saveLayout();
-}
-function saveLayout(){ Store.set("tg-layout",{order:STATE.order,spans:STATE.spans}); }
-
-/* ============================================================================
    16. BOOT
    ========================================================================== */
 var DEFAULT_CONFIG=PLAYER_CONFIG.map(function(c){ return Object.assign({},c); });
 var SEED=(document.getElementById("seed-csv").textContent||"").replace(/^\n/,"");
-
-document.getElementById("btn-reset").addEventListener("click",function(){
-  STATE.order=DEFAULT_ORDER.slice();
-  STATE.spans=Object.assign({},DEFAULT_SPANS);
-  renderBoard(); saveLayout();
-});
 
 document.getElementById("btn-refresh").addEventListener("click",function(){
   if(!SRC.url) return;
@@ -2385,19 +2246,10 @@ document.getElementById("btn-refresh").addEventListener("click",function(){
   loadFromSource(SRC.url,false);
 });
 
-Promise.all([Store.get("tg-layout"),Store.get("tg-period"),Store.get("tg-src")])
-  .catch(function(){ return [null,null,null]; })
+Promise.all([Store.get("tg-period"),Store.get("tg-src")])
+  .catch(function(){ return [null,null]; })
   .then(function(saved){
-    var layout=saved&&saved[0], period=saved&&saved[1], url=saved&&saved[2];
-
-    if(layout&&layout.order&&layout.order.length){
-      STATE.order=layout.order.filter(byId);
-      DEFAULT_ORDER.forEach(function(id){ if(STATE.order.indexOf(id)<0) STATE.order.push(id); });
-      STATE.spans=layout.spans||{};
-    } else {
-      STATE.order=DEFAULT_ORDER.slice();
-      STATE.spans=Object.assign({},DEFAULT_SPANS);
-    }
+    var period=saved&&saved[0], url=saved&&saved[1];
     STATE.period=period||"all";
 
     /* a URL saved from the UI wins over the hard-coded one, so you can retarget
